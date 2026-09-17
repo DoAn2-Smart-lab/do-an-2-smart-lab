@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Cau hinh local cua Claude Code (khong phai code du an, khong can track)
+.claude/
+
 # Cau hinh nhay cam (theo dung quy uoc .env cua Do an 1 - khong commit .env that)
 .env
 
