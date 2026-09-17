@@ -60,8 +60,32 @@ nén `_1`/`_2` trong Downloads) — đã dọn về đúng 1 bản duy nhất:
     `CallbackAPIVersion.VERSION2`, LangGraph `StateGraph`/`START`/`END`, FastAPI `@app.on_event`
     — tất cả đều chạy đúng với bản đã cài).
 
-## Ngày 2 (kế hoạch)
-- [ ] Hoàn thiện `docs-thiet-ke/Thiet-ke-Event-Bus-MQTT-Topic-Schema.md` đầy đủ hơn — hiện mới là
-  bản nháp Tuần 2 (8 topic, payload mẫu tối giản). Cần chốt cùng người phụ trách Lab Data + Power
-  Agent trước khi 2 agent đó bắt đầu code, để `models/schemas.py` phía Master Orchestrator không
-  phải sửa lại nhiều lần.
+## Ngày 2 (2026-09-17) — HOÀN THÀNH
+- Ghi đè `docs-thiet-ke/Thiet-ke-Event-Bus-MQTT-Topic-Schema.md` bằng bản chốt Ngày 2: envelope
+  chung `message_id`/`timestamp` (+07:00)/`source_agent`, QoS + retain cho từng topic, đổi
+  `zone`→`table_id` thống nhất, và cơ chế request/ACK 2 chiều trên `lab/safety/command`.
+- Cập nhật code theo đúng schema mới:
+  - `app/mqtt/topics.py`: đủ 8 topic + `TOPIC_QOS`/`TOPIC_RETAIN`; `lab/safety/command` giờ vừa
+    publish (request) vừa subscribe (ack) — có chặn cứng không cho publish `type="ack"`.
+  - `app/models/schemas.py`: envelope có `message_id` (UUID v4) + `timestamp` giờ VN (+07:00);
+    thêm `SafetyCommandRequest`/`SafetyCommandAck` theo đúng ví dụ JSON trong schema.
+  - `app/mqtt/client.py`: `publish()` giờ tự dùng đúng QoS/retain theo topic; thêm
+    `wait_for_ack(message_id, timeout)` — khớp `in_reply_to`, dùng `threading.Event`, đã verify
+    thật cả 2 nhánh (có ACK trả lời nhanh <1s / hết giờ đúng ~3s) bằng 1 Safety Agent giả lập
+    qua broker Mosquitto thật.
+  - `app/graph/nodes.py`: `wait_response` cho `safety_tutoring` giờ CHỜ ACK THẬT (không còn
+    placeholder) — publish broadcast lên `lab/orchestrator/intent` rồi gửi yêu cầu cụ thể lên
+    `lab/safety/command`, chờ tối đa 3s, báo lỗi rõ ràng nếu timeout hoặc bị từ chối
+    (`approved: false` kèm `reason`). `lab_data`/`power_load` **vẫn còn là TODO** — vẫn
+    fire-and-forget, chưa chờ kết quả thật.
+  - `app/intent/classifier.py`: tách `table_id` (regex `B0n`) và `action` ra khỏi câu nói thô
+    thay vì gộp chung vào 1 chuỗi `intent`.
+  - `app/api/chat.py`: chạy `graph.invoke()` trong thread pool (`asyncio.to_thread`) vì giờ có
+    thể block thật tới 3s khi chờ Safety Agent — tránh nghẽn event loop FastAPI.
+- **Test:** `pytest` 4/4 vẫn pass (mở rộng thêm assertion `table_id`/`action` cho từng kịch bản,
+  không có test nào fail phải sửa lại). Verify thêm bằng script thủ công (không nằm trong bộ
+  test tracked — cần Safety Agent giả lập, chưa phù hợp làm unit test tự động): xác nhận cả
+  nhánh ACK thành công và nhánh timeout 3s đều đúng thiết kế.
+- **TODO còn lại:** cơ chế chờ kết quả thật cho `lab_data` (`lab/data/result`, đã có sẵn
+  `in_reply_to` trong schema nhưng chưa nối) và `power_load` (schema chưa có kênh phản hồi);
+  Voice (Tuần 12); thay rule-based classifier bằng SLM local.

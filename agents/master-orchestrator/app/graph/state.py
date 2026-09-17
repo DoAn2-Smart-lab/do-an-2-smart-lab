@@ -11,5 +11,8 @@ class OrchestratorState(TypedDict):
     user: str
     intent: Optional[str]
     target_agent: Optional[Literal["safety_tutoring", "lab_data", "power_load"]]
+    table_id: Optional[str]
+    action: Optional[str]
+    safety_request_message_id: Optional[str]
     agent_response: Optional[dict]
     reply_text: Optional[str]

@@ -1,21 +1,22 @@
 # Master Orchestrator Agent
 
-Trạng thái: 🟡 KHUNG SƯỜN (skeleton) đã tạo bằng Claude Code — chạy được end-to-end với bộ phân
-loại rule-based (4/4 kịch bản test đã pass), nhưng **`wait_response` chưa chờ phản hồi MQTT thật**
-và tham số lệnh (tên bàn thực hành, zone, action...) chưa được tách từ câu nói thật. Việc còn lại
-vẫn đúng lịch Tuần 3-4.
+Trạng thái: 🟢 Ngày 2 — `wait_response` cho nhánh `safety_tutoring` giờ CHỜ ACK THẬT trên
+`lab/safety/command` (khớp `in_reply_to`, timeout 3s), `table_id`/`action` đã được tách riêng
+khỏi câu nói thô trong `classifier.py`. Đã test lại 4/4 kịch bản Intent Recognition với thư viện
++ Mosquitto broker thật, không mock. Còn lại: `lab_data`/`power_load` vẫn là fire-and-forget
+(chưa chờ kết quả thật), Voice vẫn để dành Tuần 12.
 
 ## Cấu trúc đã tạo
 ```
 app/
-├── main.py            # FastAPI entrypoint (uvicorn app.main:app --reload)
-├── api/chat.py         # POST /chat — chạy LangGraph, trả reply_text
-├── graph/              # state.py + nodes.py + builder.py (5 node đúng thứ tự bên dưới)
-├── intent/classifier.py # rule-based, bỏ dấu trước khi so khớp — TODO: thay bằng SLM local
-├── mqtt/               # topics.py (đúng docs-thiet-ke/Thiet-ke-Event-Bus-MQTT-Topic-Schema.md),
-│                       # client.py (wrapper paho-mqtt, chặn publish ngoài PUBLISH_TOPICS)
-└── models/schemas.py    # Pydantic khớp đúng payload mẫu trong file schema
-tests/test_intent_classifier.py  # 4 kịch bản — đã chạy pass bằng python 3.14
+├── main.py            # FastAPI entrypoint — startup subscribe đủ SUBSCRIBE_TOPICS
+├── api/chat.py         # POST /chat — chạy LangGraph trong thread pool (asyncio.to_thread)
+├── graph/              # state.py (+table_id/action/safety_request_message_id) + nodes.py + builder.py
+├── intent/classifier.py # rule-based + trích table_id (regex "B0n") + action, bỏ dấu trước khi so khớp
+├── mqtt/               # topics.py (8 topic + QoS/retain đúng schema Ngày 2),
+│                       # client.py (wrapper paho-mqtt, publish đúng QoS/retain, wait_for_ack())
+└── models/schemas.py    # Pydantic: message_id/timestamp(+07:00)/source_agent + SafetyCommandRequest/Ack
+tests/test_intent_classifier.py  # 4 kịch bản — đã chạy pass bằng thư viện thật (Python 3.14)
 ```
 
 ## Nhiệm vụ
