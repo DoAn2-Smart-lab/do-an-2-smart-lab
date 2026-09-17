@@ -13,7 +13,8 @@
 - Soạn bảng phân định "làm ở Cowork" vs "bắt buộc chuyển sang Claude Code/VSCode" theo từng tuần.
 
 ## Việc tiếp theo (Tuần 1 — chuyển sang Claude Code/VSCode)
-- [ ] Cài đặt môi trường: LangGraph, FastAPI AsyncIO, MQTT broker (Mosquitto).
+- [x] Cài đặt môi trường: LangGraph, FastAPI AsyncIO, MQTT broker (Mosquitto) — Mosquitto đã được
+  cài trước đó, tự chạy nền dưới dạng Windows Service (không cần khởi động tay).
 - [x] Rà soát lại code Đồ án 1 để xác định phần cần nâng cấp cho Safety Agent (xem tóm tắt trong
   phiên Claude Code — kỹ thuật timer thời gian thực, chốt giá trị `_AtFault`, mẫu 2-tầng DB, lớp
   giao tiếp `python-snap7` trong `main_bridge.py`).
@@ -41,9 +42,26 @@ nén `_1`/`_2` trong Downloads) — đã dọn về đúng 1 bản duy nhất:
 - Đã `git init` + thêm `.gitignore` (loại `venv/`, `__pycache__/`, `.env`, nội dung `data-logs/`)
   + commit lần đầu tại `C:\DoAn2-smartlab\`.
 
-## Việc tiếp theo (Tuần 2 trở đi)
-- [ ] Chốt chính thức JSON Schema của từng topic (hiện đang là bản nháp trong file .md) cùng
-  người phụ trách Lab Data + Power Agent trước khi 2 agent đó bắt đầu code, để `models/schemas.py`
-  không phải sửa lại nhiều lần.
-- [ ] Cài Mosquitto, chạy thử `mosquitto_sub`/`mosquitto_pub` để test end-to-end với skeleton
-  Master Orchestrator trước khi có Safety/LabData/Power Agent thật.
+## Ngày 1 (2026-09-17) — HOÀN THÀNH
+- Môi trường cài đủ: `fastapi` 0.141.1, `langgraph` 1.2.11, `langchain-core`, `paho-mqtt` 2.1.0,
+  `python-snap7` 3.1.2, `pydantic` 2.13, `uvicorn`, `python-dotenv`, `sqlalchemy`, `requests`,
+  `pytest` — cài trong `venv/` tại `C:\DoAn2-smartlab\venv\` (Python 3.14.6).
+- MQTT broker Mosquitto đã cài sẵn từ trước, chạy nền dưới dạng Windows Service tại
+  `localhost:1883` — không cần cài lại hay khởi động tay.
+- **Master Orchestrator Agent test PASS 4/4 kịch bản với thư viện thật, KHÔNG mock:**
+  - `pytest tests/test_intent_classifier.py` — 4/4 pass (safety_tutoring, lab_data, power_load,
+    unknown).
+  - Toàn bộ chuỗi thật đã chạy qua `TestClient` gọi HTTP `POST /chat` → LangGraph 5-node →
+    intent classifier → publish MQTT thật lên Mosquitto Windows Service — xác nhận bằng 1
+    subscriber Python độc lập nhận đúng JSON trên cả 3 topic (`lab/orchestrator/intent`,
+    `lab/data/query`, `lab/power/command`), đúng field theo
+    `docs-thiet-ke/Thiet-ke-Event-Bus-MQTT-Topic-Schema.md`.
+  - Không phát sinh lỗi import/tương thích phiên bản nào cần sửa (paho-mqtt v2
+    `CallbackAPIVersion.VERSION2`, LangGraph `StateGraph`/`START`/`END`, FastAPI `@app.on_event`
+    — tất cả đều chạy đúng với bản đã cài).
+
+## Ngày 2 (kế hoạch)
+- [ ] Hoàn thiện `docs-thiet-ke/Thiet-ke-Event-Bus-MQTT-Topic-Schema.md` đầy đủ hơn — hiện mới là
+  bản nháp Tuần 2 (8 topic, payload mẫu tối giản). Cần chốt cùng người phụ trách Lab Data + Power
+  Agent trước khi 2 agent đó bắt đầu code, để `models/schemas.py` phía Master Orchestrator không
+  phải sửa lại nhiều lần.
