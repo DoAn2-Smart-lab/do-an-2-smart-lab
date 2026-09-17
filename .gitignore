@@ -1,0 +1,12 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Cau hinh nhay cam (theo dung quy uoc .env cua Do an 1 - khong commit .env that)
+.env
+
+# Log/du lieu sinh ra khi chay (giu .gitkeep, khong commit noi dung)
+data-logs/*
+!data-logs/.gitkeep

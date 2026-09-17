@@ -1,0 +1,12 @@
+# Cài bằng: pip install -r requirements.txt (chạy trong VSCode/Claude Code, không chạy ở đây)
+fastapi
+uvicorn[standard]
+langgraph
+langchain-core
+paho-mqtt
+python-snap7        # kế thừa Đồ án 1 - đọc/ghi PLC S7-1500 qua S7comm
+pydantic
+python-dotenv
+sqlalchemy           # CSDL cho Lab Data Management Agent
+requests             # gọi Telegram Bot API (kênh cảnh báo dự phòng, kế thừa Đồ án 1)
+pytest               # chạy test-harness/tests/ từng Agent (vd Master Orchestrator)
