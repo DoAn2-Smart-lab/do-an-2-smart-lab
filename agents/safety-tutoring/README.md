@@ -1,8 +1,12 @@
 # Safety & Practical Tutoring Agent
 
-Trạng thái: 🔴 CHƯA VIẾT CODE — Tuần 5-9, thực hiện ở Claude Code/VSCode.
-⚠️ Phần sửa `.scl` (Data Block PLC) cần compile + download qua TIA Portal (thao tác tay, không AI
-nào làm thay được).
+Trạng thái: 🟡 ĐÃ CÓ LOGIC + TEST GIẢ LẬP (2026-09-18) — xem "Safety & Practical Tutoring Agent"
+trong `../../HANDOFF_LOG.md` để biết chi tiết. `app/` đã có MQTT client/topics/schemas + interlock
++ alert, `pytest tests/test_safety_agent.py` pass 5/5 dùng Mosquitto thật + PLC giả lập
+(`FakeSnap7Client`). CÒN TODO: test tích hợp PLC thật qua PLCSIM Advanced (đang chờ license).
+⚠️ Phần sửa `.scl` (Data Block PLC, thêm tag E-Stop/rơ-le nhiệt/contactor cho bài DOL/sao-tam
+giác — hiện CHƯA có trong `.scl` thật của Đồ án 1) cần compile + download qua TIA Portal (thao tác
+tay, không AI nào làm thay được).
 
 ## Nhiệm vụ
 - Hướng dẫn từng bước bài thực hành DOL, đảo chiều sao-tam giác.

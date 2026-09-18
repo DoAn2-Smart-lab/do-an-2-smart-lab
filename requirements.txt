@@ -10,3 +10,4 @@ python-dotenv
 sqlalchemy           # CSDL cho Lab Data Management Agent
 requests             # gọi Telegram Bot API (kênh cảnh báo dự phòng, kế thừa Đồ án 1)
 pytest               # chạy test-harness/tests/ từng Agent (vd Master Orchestrator)
+httpx                # fastapi.testclient.TestClient cần httpx (vd tests/ của Safety Agent)

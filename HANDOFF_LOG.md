@@ -89,3 +89,57 @@ nén `_1`/`_2` trong Downloads) — đã dọn về đúng 1 bản duy nhất:
 - **TODO còn lại:** cơ chế chờ kết quả thật cho `lab_data` (`lab/data/result`, đã có sẵn
   `in_reply_to` trong schema nhưng chưa nối) và `power_load` (schema chưa có kênh phản hồi);
   Voice (Tuần 12); thay rule-based classifier bằng SLM local.
+
+## Safety & Practical Tutoring Agent — logic + test giả lập (2026-09-18)
+- Xây xong khung code tại `agents/safety-tutoring/` (đặt đúng thư mục đã có sẵn từ trước, không
+  tạo `agents/safety-agent/` mới để tránh trùng lặp — README/PROJECT_CONTEXT.md đều đã dùng tên
+  `safety-tutoring`), theo đúng quy ước của `agents/master-orchestrator/`:
+  - `app/models/schemas.py`: `SafetyStatusMessage`, `SafetyCommandRequest`, `SafetyCommandAck`,
+    `SafetyAlertMessage` — đúng field/kiểu theo
+    `docs-thiet-ke/Thiet-ke-Event-Bus-MQTT-Topic-Schema.md`.
+  - `app/mqtt/topics.py`, `app/mqtt/client.py`: chỉ 3/8 topic Safety Agent cần
+    (`lab/safety/status|command|alert`), có chặn cứng không cho publish `type="request"` (việc đó
+    là của Orchestrator).
+  - `app/plc/snap7_client.py` — `SafetyPlcClient` bọc `python-snap7`, nhận tham số `client=` để
+    inject fake/mock (không phụ thuộc PLCSIM Advanced thật, hiện vẫn đang chờ license):
+    - `current_A`/`temperature_C` dùng ĐÚNG offset thật kế thừa từ Đồ án 1
+      (`OFFSET_MOTOR_CURRENT=8`, `OFFSET_MOTOR_TEMPERATURE=12`, đối chiếu từ
+      `scl/DB_Alert.scl` + `python-bridge/main_bridge.py` của Đồ án 1, DB2, "Details view" đã
+      xác nhận thật) — không bịa số cho 2 field này.
+    - `e_stop_ok`/`thermal_relay_ok`/`short_circuit_ok`/`contactor_state` là **tag MỚI cho bài
+      DOL/đảo chiều sao-tam giác của Đồ án 2, CHƯA tồn tại trong `.scl` thật** (Đồ án 1 chỉ mô
+      phỏng kẹt băng tải/quá dòng/quá nhiệt, không có E-Stop/rơ-le nhiệt/contactor riêng). Offset
+      tạm đặt `OFFSET_SAFETY_FLAGS=26` (nối tiếp sau byte cuối đã biết) — đánh dấu rõ TODO trong
+      code, **PHẢI đối chiếu lại "Details view" thật trong TIA Portal sau khi hoàn thành việc sửa
+      tay `DB_Alert.scl`** (mục 1 trong `agents/safety-tutoring/README.md`), không được coi đây
+      là offset cuối cùng.
+  - `app/main.py`: publish `lab/safety/status` mỗi 3s (`SAFETY_STATUS_INTERVAL_SECONDS`, cấu hình
+    qua `.env`), subscribe `lab/safety/command`, `interlock_ok = e_stop_ok AND thermal_relay_ok
+    AND short_circuit_ok` trước khi `close_contactor` (approve/reject kèm `reason` dạng
+    `"e_stop_not_ok"`/`"thermal_relay_not_ok"`/`"short_circuit_not_ok"`); `open_contactor` luôn
+    được phép (cắt điện là thao tác an toàn, không cần qua interlock). Alert `overcurrent`
+    (>10.3A) / `overtemperature` (>80.5°C) chỉ publish một lần lúc **vừa chuyển sang vượt ngưỡng**
+    (rising-edge, theo đúng triết lý chống spam của `main_bridge.py` Đồ án 1), kèm tự động
+    `open_contactor` (`action_taken: "contactor_opened"`).
+- **Test: `pytest tests/test_safety_agent.py` — PASS 5/5**, dùng Mosquitto thật đang chạy sẵn ở
+  `localhost:1883` (KHÔNG mock MQTT, chỉ fake PLC qua `FakeSnap7Client` mô phỏng đúng byte-level
+  offset/bit thật):
+  1. `close_contactor` được approve khi đủ 3 điều kiện an toàn (round-trip MQTT thật, khớp
+     `in_reply_to`).
+  2. `close_contactor` bị reject kèm `reason="e_stop_not_ok"` khi E-Stop chưa OK, contactor không
+     bị đóng.
+  3. `open_contactor` luôn được approve kể cả khi rơ-le nhiệt chưa OK.
+  4. Vượt ngưỡng quá dòng (11.0A) → publish đúng `lab/safety/alert`, tự cắt contactor.
+  5. Không spam alert khi vẫn còn vượt ngưỡng qua nhiều chu kỳ liên tiếp (edge-trigger).
+- **TODO còn lại (chặn bởi license PLCSIM Advanced, KHÔNG tự làm thay được):**
+  - Mở TIA Portal, thêm tag `E_Stop_OK`/`Thermal_Relay_OK`/`Short_Circuit_OK`/`Contactor_State`/
+    `Contactor_Cmd` vào `DB_Alert.scl` (bài DOL/sao-tam giác), compile + download qua PLCSIM
+    Advanced (thao tác tay, không AI nào làm thay được) — **sau đó bắt buộc mở "Details view"
+    (View > Extended) để lấy offset byte thật, sửa lại `OFFSET_SAFETY_FLAGS` và các `BIT_*` trong
+    `app/plc/snap7_client.py` cho khớp 100%** (không được giữ nguyên số tạm `26`).
+  - Test tích hợp thật với `SafetyPlcClient(client=None)` (dùng `snap7.client.Client()` thật) nối
+    PLCSIM Advanced qua S7comm — chưa làm được, cần license.
+  - Xác nhận `PLC_IP`/`PLC_RACK`/`PLC_SLOT`/`PLC_DB_NUMBER` thật trong `.env` (hiện để mặc định
+    kế thừa Đồ án 1: `192.168.0.1`, rack 0, slot 1, DB2) khớp với cấu hình PLCSIM thật khi có.
+  - Kiến trúc hiện mới hỗ trợ 1 bàn thực hành / 1 `SafetyPlcClient` / 1 DB — khi có nhiều bàn thật
+    cần mở rộng sang mapping `table_id -> db_number` (chưa cần trong phạm vi demo hiện tại).
