@@ -1,6 +1,11 @@
 # Lab Data Management Agent
 
-Trạng thái: 🔴 CHƯA VIẾT CODE — Tuần 10, thực hiện ở Claude Code/VSCode.
+Trạng thái: 🟡 ĐÃ CÓ CSDL + LOGIC QUERY/RESULT (2026-09-18) — xem "Lab Data Management Agent"
+trong `../../HANDOFF_LOG.md` để biết chi tiết. `app/db/` có 3 bảng (`devices`/`schedules`/
+`borrow_records`) + seed script, `app/main.py` xử lý `device_info`/`schedule_lookup`/
+`borrow_record` qua `lab/data/query` → `lab/data/result`, `pytest tests/test_lab_data_agent.py`
+pass 10/10 dùng Mosquitto thật + CSDL SQLite thật. CÒN TODO: bảng `documents` (upload tài liệu),
+và nối `wait_response` thật ở Master Orchestrator (hiện vẫn fire-and-forget cho nhánh này).
 
 ## Nhiệm vụ
 - CSDL thiết bị (CB, PLC, contactor, rơ-le nhiệt, biến tần...) — mỗi bản ghi gồm mã thiết bị, loại,

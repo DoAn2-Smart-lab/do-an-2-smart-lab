@@ -143,3 +143,58 @@ nén `_1`/`_2` trong Downloads) — đã dọn về đúng 1 bản duy nhất:
     kế thừa Đồ án 1: `192.168.0.1`, rack 0, slot 1, DB2) khớp với cấu hình PLCSIM thật khi có.
   - Kiến trúc hiện mới hỗ trợ 1 bàn thực hành / 1 `SafetyPlcClient` / 1 DB — khi có nhiều bàn thật
     cần mở rộng sang mapping `table_id -> db_number` (chưa cần trong phạm vi demo hiện tại).
+
+## Lab Data Management Agent — CSDL + logic query/result qua MQTT (2026-09-18)
+- Xây xong khung code tại `agents/lab-data-management/`, theo đúng quy ước của
+  `agents/master-orchestrator/` và `agents/safety-tutoring/` (FastAPI + paho-mqtt +
+  pydantic, `app/{main,models,mqtt}/`), thêm `app/db/` cho phần CSDL (SQLAlchemy 2.0 style
+  `Mapped`/`mapped_column`):
+  - `app/db/session.py`: engine + `SessionLocal`, SQLite dev tại
+    `agents/lab-data-management/data/lab_data.db` (đường dẫn tuyệt đối qua `PROJECT_ROOT`, không
+    phụ thuộc thư mục đang chạy uvicorn/pytest từ đâu), đổi CSDL sau này (vd PostgreSQL) chỉ cần
+    đổi biến môi trường `LAB_DATA_DATABASE_URL`.
+  - `app/db/models.py`: 3 bảng theo đúng yêu cầu —
+    `devices` (device_id PK, name, table_id liên kết bàn thực hành, device_type, status,
+    specifications dạng JSON tự do), `schedules` (class_name, subject, table_id, practice_date,
+    start_time, end_time, instructor), `borrow_records` (device_id FK → devices, student_id,
+    student_name, borrowed_at, returned_at nullable, status).
+  - `app/db/seed.py`: script migration/seed độc lập (`python -m app.db.seed`), `init_db()` tạo
+    bảng + `seed()` chèn dữ liệu mẫu (3 devices, 2 schedules, 2 borrow_records) **idempotent**
+    (kiểm tra rỗng trước khi chèn, chạy lại nhiều lần không trùng — đã verify tay chạy 2 lần liên
+    tiếp, số dòng không đổi). `tests/` import trực tiếp `SAMPLE_*`/`seed`/`init_db` từ file này để
+    dùng chung 1 nguồn dữ liệu mẫu với script thật, tránh lệch.
+  - `app/models/schemas.py`: `LabDataQueryMessage` (`query`, `device_id`, `filters` — đúng tên
+    field trong file schema, KHÔNG phải `query_type`), `LabDataResultMessage` (`in_reply_to`,
+    `device_id`, `status`, `spec`) + 3 model con `DeviceInfo`/`ScheduleInfo`/`BorrowRecordInfo`
+    mô tả nội dung `spec` cho từng loại query. **Khác 1 điểm so với `DataResult` cũ trong
+    `agents/master-orchestrator/app/models/schemas.py`:** `device_id` ở đây để `Optional` (thay
+    vì bắt buộc), vì `schedule_lookup`/`borrow_record` theo sinh viên không có đúng 1 device_id —
+    xem TODO bên dưới, cần nới lỏng lại ở Orchestrator khi tích hợp thật.
+  - `app/main.py`: subscribe `lab/data/query`, định tuyến theo `query` qua `QUERY_HANDLERS`
+    (`device_info` tra `devices` theo PK, `schedule_lookup` tra `schedules` theo
+    `filters.table_id`/`filters.date`, `borrow_record` tra `borrow_records` theo `device_id` hoặc
+    `filters.student_id`), publish `lab/data/result` với `in_reply_to` đúng `message_id` của
+    query. `status`: `"ok"` (có kết quả), `"not_found"` (query hợp lệ nhưng không có dòng khớp),
+    `"error"` (thiếu tham số bắt buộc, `filters.date` sai định dạng, `query` không được hỗ trợ,
+    hoặc lỗi CSDL nội bộ) — luôn kèm `spec.error` mô tả rõ, không im lặng bỏ qua.
+- **Test: `pytest tests/test_lab_data_agent.py` — PASS 10/10**, dùng Mosquitto thật
+  (KHÔNG mock MQTT) + CSDL SQLite THẬT trên 1 file tạm riêng cho mỗi lần chạy test (dọn lại sau
+  khi test xong), seed từ đúng `app/db/seed.py`: `device_info` tìm thấy/không thấy/thiếu
+  `device_id`, `schedule_lookup` theo bàn+ngày/không khớp/ngày sai định dạng, `borrow_record`
+  theo `device_id`/theo `student_id`/thiếu cả 2, và `query` không hợp lệ.
+- Cập nhật `.gitignore`: thêm `agents/lab-data-management/data/*` (giữ `.gitkeep`) — không commit
+  file `.db` thật, giống quy ước `data-logs/*` đã có.
+- **TODO còn lại (không làm trong lần này, để dành cho lần sửa Master Orchestrator):**
+  - `agents/master-orchestrator/app/graph/nodes.py`: `wait_response` cho nhánh `lab_data` **vẫn
+    còn fire-and-forget** — publish `lab/data/query` xong không chờ `lab/data/result` thật (khác
+    với nhánh `safety_tutoring` đã chờ ACK thật từ Ngày 2). Cần thêm cơ chế khớp `in_reply_to`
+    (tái dùng đúng cơ chế `wait_for_ack` đã có trong `OrchestratorMqttClient`) + timeout, rồi map
+    `status`/`spec` sang câu trả lời cho người dùng.
+  - Khi làm việc đó, `agents/master-orchestrator/app/models/schemas.py::DataResult.device_id`
+    (hiện bắt buộc `str`) cần đổi thành `Optional[str]` để khớp với `LabDataResultMessage` thật ở
+    đây (Lab Data Agent đã publish `device_id: null` cho `schedule_lookup`/`borrow_record` theo
+    sinh viên) — nếu không sửa, `SafetyCommandAck`-style `ValidationError` sẽ xảy ra khi
+    Orchestrator parse message loại này.
+  - Chưa có bảng `documents` (upload tài liệu/SOP) nhắc trong
+    `agents/lab-data-management/README.md` — nằm ngoài phạm vi yêu cầu lần này, để dành giai đoạn
+    sau.

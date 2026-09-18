@@ -13,3 +13,8 @@ __pycache__/
 # Log/du lieu sinh ra khi chay (giu .gitkeep, khong commit noi dung)
 data-logs/*
 !data-logs/.gitkeep
+
+# CSDL SQLite dev cua Lab Data Management Agent - sinh ra tu app/db/seed.py, khong commit file
+# .db that (giu .gitkeep de van co thu muc data/ khi clone repo)
+agents/lab-data-management/data/*
+!agents/lab-data-management/data/.gitkeep
