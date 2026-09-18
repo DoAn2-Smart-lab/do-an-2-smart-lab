@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app, get_monitor
 from app.models.schemas import SafetyCommandAck, SafetyCommandRequest
-from app.mqtt.topics import TOPIC_SAFETY_ALERT, TOPIC_SAFETY_COMMAND
+from app.mqtt.topics import TOPIC_SAFETY_ALERT, TOPIC_SAFETY_COMMAND, TOPIC_SAFETY_STATUS
 from app.plc.snap7_client import (
     BIT_CONTACTOR_CMD,
     BIT_CONTACTOR_STATE,
@@ -58,12 +58,19 @@ class FakeSnap7Client:
         self._dbs: dict[int, bytearray] = {}
         self._db_size = db_size
         self._connected = False
+        # ---- tien ich mo phong mat ket noi / loi giao tiep, dung cho test retry + NACK ----
+        self.connect_call_count = 0
+        self.fail_reconnect = False  # True = connect() khong lam gi, van con mat ket noi
+        self.raise_on_read: Exception | None = None
+        self.raise_on_write: Exception | None = None
 
     def _buf(self, db_number: int) -> bytearray:
         return self._dbs.setdefault(db_number, bytearray(self._db_size))
 
     def connect(self, address: str, rack: int, slot: int) -> None:
-        self._connected = True
+        self.connect_call_count += 1
+        if not self.fail_reconnect:
+            self._connected = True
 
     def disconnect(self) -> None:
         self._connected = False
@@ -71,16 +78,27 @@ class FakeSnap7Client:
     def get_connected(self) -> bool:
         return self._connected
 
+    def simulate_disconnect(self) -> None:
+        """Mo phong PLC bi rot ket noi giua chung (vd PLCSIM treo/CPU chuyen STOP) - dung cho
+        test co che retry cua SafetyMonitor._ensure_plc_connected()."""
+        self._connected = False
+
     def db_read_bool(self, db_number: int, byte_offset: int, bit_offset: int) -> bool:
+        if self.raise_on_read is not None:
+            raise self.raise_on_read
         return snap7.util.get_bool(self._buf(db_number), byte_offset, bit_offset)
 
     def db_write_bool(self, db_number: int, byte_offset: int, bit_offset: int, value: bool) -> None:
+        if self.raise_on_write is not None:
+            raise self.raise_on_write
         buf = self._buf(db_number)
         snap7.util.set_bool(buf, byte_offset, bit_offset, value)
         if byte_offset == OFFSET_SAFETY_FLAGS and bit_offset == BIT_CONTACTOR_CMD:
             snap7.util.set_bool(buf, OFFSET_SAFETY_FLAGS, BIT_CONTACTOR_STATE, value)
 
     def db_read_real(self, db_number: int, offset: int) -> float:
+        if self.raise_on_read is not None:
+            raise self.raise_on_read
         return snap7.util.get_real(self._buf(db_number), offset)
 
     def db_write_real(self, db_number: int, offset: int, value: float) -> None:
@@ -129,6 +147,10 @@ class MqttWaiter:
             self._event.wait(max(0.0, deadline - time.monotonic()))
             self._event.clear()
         raise TimeoutError(f"Khong nhan duoc message phu hop trong {timeout}s")
+
+    def clear(self) -> None:
+        with self._lock:
+            self._messages.clear()
 
     def close(self) -> None:
         self._client.loop_stop()
@@ -247,3 +269,93 @@ def test_alert_not_republished_while_still_over_threshold(fake_plc, waiter):
 
         overcurrent_alerts = [m for m in waiter._messages if m.get("fault_type") == "overcurrent"]
         assert len(overcurrent_alerts) == 1
+
+
+def test_status_loop_reconnects_after_plc_disconnect(fake_plc, waiter):
+    """Mo phong PLC rot ket noi giua chung (vd PLCSIM treo) - SafetyMonitor phai tu goi connect()
+    lai NGAY trong chu ky do va van publish status thanh cong, khong duoc de exception vang len."""
+    init_plc_client(table_id=TABLE_ID, client=fake_plc)
+    waiter.subscribe(TOPIC_SAFETY_STATUS)
+
+    with TestClient(app):
+        time.sleep(0.3)  # cho retained message (neu co, tu test truoc - topic nay retain=True) toi
+        waiter.clear()  # xoa retained message cu de assertion ben duoi chi khop message MOI
+
+        connect_calls_after_startup = fake_plc.connect_call_count
+        assert fake_plc.get_connected() is True
+
+        fake_plc.simulate_disconnect()
+        assert fake_plc.get_connected() is False
+
+        status_msg = get_monitor().run_cycle()
+
+        assert status_msg is not None
+        assert fake_plc.connect_call_count == connect_calls_after_startup + 1
+        assert fake_plc.get_connected() is True
+
+        waiter.wait_for(lambda m: m.get("table_id") == TABLE_ID)
+
+
+def test_status_loop_skips_cycle_when_reconnect_fails(fake_plc, waiter):
+    """Neu connect() lai van that bai (PLC van mat), run_cycle() phai tra ve None va bo qua chu
+    ky do (khong crash, khong publish status voi du lieu cu/rac)."""
+    init_plc_client(table_id=TABLE_ID, client=fake_plc)
+    waiter.subscribe(TOPIC_SAFETY_STATUS)
+
+    with TestClient(app):
+        time.sleep(0.3)  # cho retained message (neu co, tu test truoc - topic nay retain=True) toi
+        waiter.clear()  # xoa retained message cu - test nay can chac chan KHONG co message MOI nao
+
+        fake_plc.simulate_disconnect()
+        fake_plc.fail_reconnect = True
+
+        status_msg = get_monitor().run_cycle()
+
+        assert status_msg is None
+        assert fake_plc.get_connected() is False
+        with pytest.raises(TimeoutError):
+            waiter.wait_for(lambda m: m.get("table_id") == TABLE_ID, timeout=1.0)
+
+
+def test_close_contactor_nacks_when_plc_read_raises(fake_plc, waiter):
+    """Loi giao tiep PLC (vd mat ket noi giua chung, exception tu snap7) khi doc trang thai an
+    toan luc xu ly close_contactor phai tra ve NACK ro rang, khong duoc lam mat luon ACK khien
+    Orchestrator phai cho het 3s roi bao timeout."""
+    fake_plc.raise_on_read = ConnectionError("mo phong mat ket noi PLC giua chung")
+    init_plc_client(table_id=TABLE_ID, client=fake_plc)
+    waiter.subscribe(TOPIC_SAFETY_COMMAND)
+
+    with TestClient(app):
+        time.sleep(0.2)
+        request = SafetyCommandRequest(
+            source_agent="test-harness", table_id=TABLE_ID, requested_action="close_contactor"
+        )
+        waiter.publish(TOPIC_SAFETY_COMMAND, request.model_dump_json())
+
+        raw = waiter.wait_for(lambda m: m.get("in_reply_to") == request.message_id)
+        ack = SafetyCommandAck(**raw)
+
+        assert ack.approved is False
+        assert ack.reason == "plc_unreachable"
+        assert ack.action == "close_contactor"
+
+
+def test_open_contactor_nacks_when_plc_write_raises(fake_plc, waiter):
+    """Tuong tu nhung loi xay ra o buoc GHI (open_contactor) thay vi doc."""
+    fake_plc.raise_on_write = RuntimeError("mo phong loi ghi PLC")
+    init_plc_client(table_id=TABLE_ID, client=fake_plc)
+    waiter.subscribe(TOPIC_SAFETY_COMMAND)
+
+    with TestClient(app):
+        time.sleep(0.2)
+        request = SafetyCommandRequest(
+            source_agent="test-harness", table_id=TABLE_ID, requested_action="open_contactor"
+        )
+        waiter.publish(TOPIC_SAFETY_COMMAND, request.model_dump_json())
+
+        raw = waiter.wait_for(lambda m: m.get("in_reply_to") == request.message_id)
+        ack = SafetyCommandAck(**raw)
+
+        assert ack.approved is False
+        assert ack.reason == "plc_unreachable"
+        assert ack.action == "open_contactor"

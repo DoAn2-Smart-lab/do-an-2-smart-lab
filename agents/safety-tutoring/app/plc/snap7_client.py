@@ -108,6 +108,12 @@ class SafetyPlcClient:
         except Exception:
             logger.exception("Loi khi ngat ket noi PLC cho ban %s", self._table_id)
 
+    def is_connected(self) -> bool:
+        try:
+            return bool(self._client.get_connected())
+        except Exception:
+            return False
+
     def read_safety_status(self) -> dict:
         """Tra ve dict khop dung field cua lab/safety/status (xem models/schemas.py:
         SafetyStatusMessage)."""

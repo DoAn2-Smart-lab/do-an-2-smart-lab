@@ -78,37 +78,53 @@ def handle_command_request(
     if request.table_id != table_id:
         return None
 
-    if request.requested_action == "open_contactor":
-        # Cat dien la thao tac AN TOAN, khong can kiem interlock - luon duoc phep.
-        plc_client.open_contactor(request.table_id)
-        ack = SafetyCommandAck(
-            source_agent=SOURCE_AGENT,
-            in_reply_to=request.message_id,
-            table_id=request.table_id,
-            approved=True,
-            action="open_contactor",
+    try:
+        if request.requested_action == "open_contactor":
+            # Cat dien la thao tac AN TOAN, khong can kiem interlock - luon duoc phep.
+            plc_client.open_contactor(request.table_id)
+            ack = SafetyCommandAck(
+                source_agent=SOURCE_AGENT,
+                in_reply_to=request.message_id,
+                table_id=request.table_id,
+                approved=True,
+                action="open_contactor",
+            )
+        elif request.requested_action == "close_contactor":
+            status = plc_client.read_safety_status()
+            ok, reason = check_interlock(status)
+            if ok:
+                plc_client.close_contactor(request.table_id)
+            ack = SafetyCommandAck(
+                source_agent=SOURCE_AGENT,
+                in_reply_to=request.message_id,
+                table_id=request.table_id,
+                approved=ok,
+                action="close_contactor",
+                reason=reason,
+            )
+        else:
+            ack = SafetyCommandAck(
+                source_agent=SOURCE_AGENT,
+                in_reply_to=request.message_id,
+                table_id=request.table_id,
+                approved=False,
+                action=request.requested_action,
+                reason="unknown_action",
+            )
+    except Exception:
+        # Bat MOI loi giao tiep PLC (mat ket noi, exception tu snap7...) - KHONG duoc de van
+        # lam mat luon phan hoi cho Orchestrator (Orchestrator dang cho ACK toi da 3s), phai
+        # NACK ro rang de nguoi dung biet PLC dang co van de thay vi tuong Safety Agent treo.
+        logger.exception(
+            "Loi giao tiep PLC khi xu ly lenh '%s' cho ban %s", request.requested_action, request.table_id
         )
-    elif request.requested_action == "close_contactor":
-        status = plc_client.read_safety_status()
-        ok, reason = check_interlock(status)
-        if ok:
-            plc_client.close_contactor(request.table_id)
-        ack = SafetyCommandAck(
-            source_agent=SOURCE_AGENT,
-            in_reply_to=request.message_id,
-            table_id=request.table_id,
-            approved=ok,
-            action="close_contactor",
-            reason=reason,
-        )
-    else:
         ack = SafetyCommandAck(
             source_agent=SOURCE_AGENT,
             in_reply_to=request.message_id,
             table_id=request.table_id,
             approved=False,
             action=request.requested_action,
-            reason="unknown_action",
+            reason="plc_unreachable",
         )
 
     mqtt_client.publish(TOPIC_SAFETY_COMMAND, ack)
@@ -127,7 +143,10 @@ class SafetyMonitor:
         self._overcurrent_active = False
         self._overtemperature_active = False
 
-    def run_cycle(self) -> SafetyStatusMessage:
+    def run_cycle(self) -> Optional[SafetyStatusMessage]:
+        if not self._ensure_plc_connected():
+            return None
+
         status = self._plc.read_safety_status()
         status_msg = SafetyStatusMessage(source_agent=SOURCE_AGENT, **status)
         self._mqtt.publish(TOPIC_SAFETY_STATUS, status_msg)
@@ -147,6 +166,26 @@ class SafetyMonitor:
             threshold=OVERTEMPERATURE_THRESHOLD_C,
         )
         return status_msg
+
+    def _ensure_plc_connected(self) -> bool:
+        """Kiem tra PLC con ket noi khong truoc khi doc; neu mat ket noi thi thu connect() lai
+        NGAY trong chu ky nay (khong doi sang chu ky sau). Tra ve False neu van khong ket noi
+        duoc - de run_cycle() bo qua chu ky do thay vi de exception vang len tu read_safety_status()."""
+        if self._plc.is_connected():
+            return True
+
+        logger.warning("Mat ket noi PLC cho ban %s - dang thu ket noi lai...", self._table_id)
+        self._plc.connect()
+
+        if not self._plc.is_connected():
+            logger.warning(
+                "Ket noi lai PLC that bai cho ban %s - bo qua chu ky doc trang thai nay, se thu "
+                "lai o chu ky tiep theo.", self._table_id,
+            )
+            return False
+
+        logger.info("Da ket noi lai PLC thanh cong cho ban %s sau khi mat ket noi.", self._table_id)
+        return True
 
     def _check_alert(self, was_active: bool, is_active: bool, fault_type: str, value: float, threshold: float) -> bool:
         if is_active and not was_active:
